@@ -31,7 +31,7 @@ import shutil
 # K.clear_session()                                                                                               # makes nameing models easier 
 
 
-def make_dem_crops(dem, lons_mg, lats_mg, n_files, n_per_file, n_pix, outdir):
+def make_dem_crops(dem, lons_mg, lats_mg, n_files, n_per_file, n_pix, outdir = None):
     """Given a DEM (and the lons and lats of each pixel in it), create random crops of it.  
     Inputs:
         dem | masked array | DEM
@@ -41,6 +41,7 @@ def make_dem_crops(dem, lons_mg, lats_mg, n_files, n_per_file, n_pix, outdir):
         n_per_file | int | number of DEMs per file.  
         outdir | string/path | directory to save files to.  
     Returns:
+        dems | list of dicts | each DEM is dict in a list, and each dict has various keys and variables, such as dem, lons_mg, lats_mg, name, and centre.  
         Files containing DEMs.
     History:
         2020_03_02 | MEG | Written.  
@@ -67,10 +68,13 @@ def make_dem_crops(dem, lons_mg, lats_mg, n_files, n_per_file, n_pix, outdir):
                                       lats_minis[int(n_pix/2),int(n_pix/2)])})                          # and lat
             
             
-        with open(Path(f'{outdir}/dem_file_{file_n}.pkl'), 'wb') as f:
-            pickle.dump(dems, f)                                                    # usual output style is many channel formats in a dict, but we are only interesetd in the one we generated.  
-        f.close()
+        if outdir is not None:
+            with open(Path(f'{outdir}/dem_file_{file_n}.pkl'), 'wb') as f:
+                pickle.dump(dems, f)                                                    # usual output style is many channel formats in a dict, but we are only interesetd in the one we generated.  
+            f.close()
         print(f"Completed file {file_n} of {n_files}.")
+        
+    return dems
 
   
 
@@ -311,12 +315,6 @@ else:
 
 
 
-#%% 2:  Make random crops of DEM from master (Iberian) DEM.  
-print(f"Making the random crops of the DEM...", end = '')
-
-make_dem_crops(dem_master, lons_mg, lats_mg, synthetic_ifgs_n_files, ifg_settings['n_per_file'], n_pixs_dem, Path('./02_dem_files'))
-print(f"Done.  ")
-del n_pixs_dem
 #%% 3: Create or load the synthetic interferograms.  
 
 
@@ -325,18 +323,15 @@ n_synth_data = ifg_settings['n_per_file'] * synthetic_ifgs_n_files
 for file_n in range(synthetic_ifgs_n_files):
     print(f"Generating file {file_n} of {synthetic_ifgs_n_files} files.  ")
 
-    with open(Path(f'./02_dem_files/dem_file_{file_n}.pkl'), 'rb') as f:                                            # open the file of DEMs that will be used for this file of synthetic ifgs.  
-        dems = pickle.load(f)
-    f.close()
-    
+    dems = make_dem_crops(dem_master, lons_mg, lats_mg, n_files = 1, n_per_file=ifg_settings['n_per_file'], n_pix = n_pixs_dem)       # create random crops of the DEM for using in synthetic ifgs.     
  
-    X_all, Y_class, Y_loc, Y_source_kwargs = create_random_synthetic_ifgs(dems, **synthetic_ifgs_settings)          # generate the synthetic ifgs for this file.  
+    X_all, Y_class, Y_loc, Y_source_kwargs = create_random_synthetic_ifgs(dems, **synthetic_ifgs_settings)                             # generate the synthetic ifgs for this file.  
     
-    X = X_all['www'][:,:,:,0].filled(fill_value = 0)[:,:,:,np.newaxis]                                                                # get the wrapped phase, and fill any masked pixels with 0s
-    Y = X_all['uuu'][:,:,:,0].filled(fill_value = 0)[:,:,:,np.newaxis]                                                                # get the unwrapped phase
-    dem = X_all['rid'][:,:,:,2].filled(fill_value = ma.mean(X_all['rid'][:,:,:,2]))[:,:,:,np.newaxis]                                 # get hte dem, but this time fill with the mean value of the DEM (as it could be a long way from 0 in mountains)
+    X = X_all['www'][:,:,:,0].filled(fill_value = 0)[:,:,:,np.newaxis]                                                                 # get the wrapped phase, and fill any masked pixels with 0s
+    Y = X_all['uuu'][:,:,:,0].filled(fill_value = 0)[:,:,:,np.newaxis]                                                                 # get the unwrapped phase
+    dem = X_all['rid'][:,:,:,2].filled(fill_value = ma.mean(X_all['rid'][:,:,:,2]))[:,:,:,np.newaxis]                                  # get hte dem, but this time fill with the mean value of the DEM (as it could be a long way from 0 in mountains)
     
-    np.savez(f'./03_synthetic_ifgs/data_file_{file_n}.npz', X = X, Y = Y, dem=dem)                                  # save the data, now as a .npz as we aren't using masked arrays.  
+    np.savez(f'./03_synthetic_ifgs/data_file_{file_n}.npz', X = X, Y = Y, dem=dem)                                                     # save the data, now as a .npz as we aren't using masked arrays.  
     
     del X_all, Y_class, Y_loc
 

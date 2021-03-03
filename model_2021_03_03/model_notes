@@ -1,0 +1,28 @@
+n_files = 26
+n_per_file = 100
+
+X_validate, Y_validate, dem_validate = file_merger(data_files_validate)                             # Open all the validation data to RAM
+X_test, Y_test, dem_test = file_merger(data_files_test)                             #
+
+unwrap_FCN_input = keras.Input(shape=X_validate[0,].shape)                                                                                       # n_batch is ommited here
+x = layers.Conv2D(filters = 64, kernel_size = 3, activation='relu', input_shape = X_validate[0,].shape, padding ='same')(unwrap_FCN_input)        # first layers of the model are 1D convolutions.
+x = layers.Conv2D(filters = 64, kernel_size = 3, activation='relu', padding ='same')(x)
+x = layers.Conv2D(filters = 64, kernel_size = 3, activation='relu', padding ='same')(x)
+x = layers.Conv2D(filters = 64, kernel_size = 3, activation='relu', padding ='same')(x)
+x = layers.Conv2D(filters = 64, kernel_size = 3, activation='relu', padding ='same')(x)
+x = layers.Conv2D(filters = 64, kernel_size = 3, activation='relu', padding ='same')(x)
+x = layers.Conv2D(filters = 32, kernel_size = 3, activation='relu', padding ='same')(x)
+x = layers.Conv2D(filters = 16, kernel_size = 3, activation='relu', padding ='same')(x)
+unwrap_FCN_output = layers.Conv2D(filters = 1, kernel_size = 1, activation='relu', padding ='same')(x)
+
+
+
+unwrap_FCN_model = keras.Model(inputs = unwrap_FCN_input, outputs = unwrap_FCN_output, name = 'unwrap_FCN')                                                      # build hte model
+unwrap_FCN_model.summary()                                                                                                                                 # summary to terminal.
+keras.utils.plot_model(unwrap_FCN_model, "unwrap_FCN.png", show_shapes=True)                                                                               # plot the model
+
+unwrap_FCN_model.compile(optimizers.Nadam(clipnorm = 1., clipvalue = 0.5), losses.mean_squared_error, metrics = [tf.keras.metrics.MeanSquaredError()])     # compile.
+
+unwrap_FCN_model, metrics_loss = train_unw_network(unwrap_FCN_model, data_files_train, n_epochs, ['loss'], X_validate, Y_validate)                                    # train
+
+unwrap_FCN_model.save('unwrap_FCN_model')
