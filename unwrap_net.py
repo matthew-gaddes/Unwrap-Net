@@ -21,14 +21,13 @@ import glob
 import os
 from pathlib import Path
 import shutil
-# import keras
-# from keras import backend as K
-# from keras import losses, optimizers
-# from keras.applications.vgg16 import VGG16
-# from keras.utils.vis_utils import plot_model
-# from keras.models import Model, load_model
-# from keras.layers import Input
-# K.clear_session()                                                                                               # makes nameing models easier 
+import time
+from contextlib import redirect_stdout                                             # used to send model summary to a .txt file
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+from keras import losses, optimizers
+
 
 
 def make_dem_crops(dem, lons_mg, lats_mg, n_files, n_per_file, n_pix, outdir = None):
@@ -119,46 +118,6 @@ def file_merger(files):
     
     return X, Y, dem
 
-
-def train_unw_network(model, files, n_epochs, loss_names,
-                      X_validate, Y_validate):
-    """Train a double headed model using training data stored in separate files.  
-    Inputs:
-        model | keras model | the model to be trained
-        files | list | list of paths and filenames for the files used during training
-        n_epochs | int | number of epochs to train for
-        loss names | list | names of outputs of losses (e.g. "class_dense3_loss)
-    Returns
-        model | keras model | updated by the fit process
-        metrics_loss | r2 array | columns are: total loss/class loss/loc loss /validate total loss/validate class loss/ validate loc loss
-        metrics_class | r2 array | columns are class accuracy, validation class accuracy
-        
-    2019/03/25 | Written.  
-    """
-    import numpy as np
-    import keras
-    
-    n_files_train = len(files)                                                              # get the number of training files
-    
-    metrics_loss = np.zeros((n_files_train*n_epochs, 2))                                     # total loss/class loss/loc loss /validate total loss/validate class loss/ validate loc loss
-    
-    for e in range(n_epochs):                                                                        # loop through the number of epochs
-        for file_num, file in enumerate(files):                                   # for each epoch, loop through all files once
-        
-            data = np.load(file)
-            X_batch = data['X']
-            Y_batch = data['Y']
-            
-            history_train_temp = model.fit(X_batch, Y_batch, batch_size=32, epochs=1, verbose = 0)                      # train it on one file
-            metrics_loss[(e*n_files_train)+file_num, 0] = history_train_temp.history['loss'][0]                        # main loss    
-            print(f'Epoch {e}, file {file_num}: Loss = {round(metrics_loss[(e*n_files_train)+file_num, 0],0)} ')
-
-            
-        history_validate_temp = model.evaluate(X_validate, Y_validate, batch_size = 32, verbose = 0)                    # predict on validation data
-        metrics_loss[(e*n_files_train)+file_num, 1] = history_validate_temp[0]                                          # main loss, validation
-        print(f'Epoch {e}, valid.: Loss = {round(metrics_loss[(e*n_files_train)+file_num, 1],0)} ')
-    
-    return model, metrics_loss
 
 
 
@@ -266,7 +225,7 @@ cnn_settings = {'n_files_train'    : 2,                                         
                 'n_files_validate' : 1,                                               # the number of files that wil be used to validate the network (i.e. passed through once per epoch)
                 'n_files_test'     : 1}                                               # the number of files held back for testing.  
 
-n_epochs = 20
+n_epochs = 5
 
    
 np.random.seed(0)                                                                                           # 0 used in the example
@@ -356,11 +315,90 @@ data_files_train, data_files_validate, data_files_test = file_list_divider(data_
 
 
 
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
+def train_unw_network(model, files, n_epochs, loss_names, X_validate, Y_validate, outdir):
+    """Train a double headed model using training data stored in separate files.  
+    Inputs:
+        model | keras model | the model to be trained
+        files | list | list of paths and filenames for the files used during training
+        n_epochs | int | number of epochs to train for
+        loss names | list | names of outputs of losses (e.g. "class_dense3_loss)
+    Returns
+        model | keras model | updated by the fit process
+        metrics_loss | r2 array | columns are: total loss/class loss/loc loss /validate total loss/validate class loss/ validate loc loss
+        metrics_class | r2 array | columns are class accuracy, validation class accuracy
+        
+    2019/03/25 | Written.  
+    2021/03/08 | MEG | Save the model after each epoch.  A crude approach to early stopping
+    """
+    import numpy as np
+    import keras
+    
+    def plot_single_train_validate_loss(metrics_loss, n_files, outdir, n_epoch,
+                                        pointsize = 2, spacing = 2):
+        """ Create a plot showing training and validation loss when training using data split across multiple files.  
+        Inputs:
+            metrics_loss | numpy array | (n_files * n_epochs) x 2, becuase there is a loss for each file in every epoch.  First column for training, second for validation (so mostly 0s as only 1 pass per epoch)
+            n_files | int | number of files being passed
+            out_dir | string or Path | directory to save the figure to
+            n_epoch | which epoch number currently up to (i.e epoch 5 of 10)
+            pontsize | int | size of points in plot
+            spacing | int | every nth epoch is labelled on the x axis.  
+        """
+        
+        
+        all_epochs = np.arange(0, metrics_loss.shape[0])                                         # n_files * n_epochs
+        validation_epochs = np.arange(-1, metrics_loss.shape[0], n_files)[1:]                    # n_epochs (as only do the validation data once an epoch)
+        
+        f, ax = plt.subplots(1,1)
+        ax.scatter(all_epochs[:n_files*(n_epoch+1)], metrics_loss[:,0][:n_files*(n_epoch+1)], s=pointsize )                                  # training loss
+        ax.scatter(validation_epochs[:n_files*(n_epoch+1)], metrics_loss[validation_epochs,1][:n_files*(n_epoch+1)], s=pointsize )           # validation loss
+        
+        ax.grid(True, alpha = 0.2, which = 'both')
+        ax.set_xlim([0, all_epochs.shape[0]])
+        ax.set_ylim(bottom = 0)
+        ax.set_xticks(np.arange(0,n_files * n_epochs,spacing * n_files))                 # change so a tick only after each epoch (and not each file)
+        ax.set_xticklabels(np.arange(0,n_epochs, spacing))                                  # number ticks
+        ax.set_ylabel('Loss')
+        ax.set_xlabel('Epoch n')
+        f.savefig(Path(f"{outdir}/epoch_{n_epoch:003}_training_progress.png"), bbox_inches='tight')
+        plt.close(f)
 
-from keras import losses, optimizers
+    
+    n_files_train = len(files)                                                              # get the number of training files
+    
+    metrics_loss = np.zeros((n_files_train*n_epochs, 2))                                     # total loss/class loss/loc loss /validate total loss/validate class loss/ validate loc loss
+    
+    for e in range(n_epochs):                                                                        # loop through the number of epochs
+        for file_num, file in enumerate(files):                                   # for each epoch, loop through all files once
+        
+            data = np.load(file)
+            X_batch = data['X']
+            Y_batch = data['Y']
+            
+            history_train_temp = model.fit(X_batch, Y_batch, batch_size=32, epochs=1, verbose = 0)                      # train it on one file
+            metrics_loss[(e*n_files_train)+file_num, 0] = history_train_temp.history['loss'][0]                        # main loss    
+            print(f'Epoch {e}, file {file_num}: Loss = {round(metrics_loss[(e*n_files_train)+file_num, 0],0)} ')
+
+            
+        history_validate_temp = model.evaluate(X_validate, Y_validate, batch_size = 32, verbose = 0)                    # predict on validation data
+        metrics_loss[(e*n_files_train)+file_num, 1] = history_validate_temp[0]                                          # main loss, validation
+        print(f'Epoch {e}, valid.: Loss = {round(metrics_loss[(e*n_files_train)+file_num, 1],0)} ')
+        
+        print(f"Saving the current model...", end = '')
+        model.save(Path(f"{outdir}/epoch_{e:03}_model_weights"))                                                        # save the model after each epoch
+        print('Done.  ')
+        
+        #pdb.set_trace()
+        plot_single_train_validate_loss(metrics_loss, len(files), outdir, e)
+
+        
+    
+    return model, metrics_loss
+
+
+
+model_output_dir = Path(f"./unwrap_net_run_{time.strftime('%Y_%m_%d_%H_%M_%S')}")              # make the name of a directory for this model run
+os.makedirs(model_output_dir)                                                                  # make a folder to save things for this run
 
 
 # 1 open the data that is not handled in a file by file manner
@@ -369,26 +407,30 @@ X_test, Y_test, dem_test = file_merger(data_files_test)                         
 
 unwrap_FCN_input = keras.Input(shape=X_validate[0,].shape)                                                                                       # n_batch is ommited here
 x = layers.Conv2D(filters = 64, kernel_size = 3, activation='relu', input_shape = X_validate[0,].shape, padding ='same')(unwrap_FCN_input)        # first layers of the model are 1D convolutions.  
-x = layers.Conv2D(filters = 64, kernel_size = 3, activation='relu', padding ='same')(x)
-x = layers.Conv2D(filters = 64, kernel_size = 3, activation='relu', padding ='same')(x)
-x = layers.Conv2D(filters = 64, kernel_size = 3, activation='relu', padding ='same')(x)
-x = layers.Conv2D(filters = 64, kernel_size = 3, activation='relu', padding ='same')(x)
+x = layers.Conv2D(filters = 128, kernel_size = 3, activation='relu', padding ='same')(x)
+x = layers.Conv2D(filters = 128, kernel_size = 3, activation='relu', padding ='same')(x)
+x = layers.Conv2D(filters = 256, kernel_size = 3, activation='relu', padding ='same')(x)
+x = layers.Conv2D(filters = 128, kernel_size = 3, activation='relu', padding ='same')(x)
 x = layers.Conv2D(filters = 64, kernel_size = 3, activation='relu', padding ='same')(x)
 x = layers.Conv2D(filters = 32, kernel_size = 3, activation='relu', padding ='same')(x)
 x = layers.Conv2D(filters = 16, kernel_size = 3, activation='relu', padding ='same')(x)
 unwrap_FCN_output = layers.Conv2D(filters = 1, kernel_size = 1, activation='relu', padding ='same')(x)
 
 
-
 unwrap_FCN_model = keras.Model(inputs = unwrap_FCN_input, outputs = unwrap_FCN_output, name = 'unwrap_FCN')                                                      # build hte model
-unwrap_FCN_model.summary()                                                                                                                                 # summary to terminal.  
-keras.utils.plot_model(unwrap_FCN_model, "unwrap_FCN.png", show_shapes=True)                                                                               # plot the model
-
 unwrap_FCN_model.compile(optimizers.Nadam(clipnorm = 1., clipvalue = 0.5), losses.mean_squared_error, metrics = [tf.keras.metrics.MeanSquaredError()])     # compile.  
 
-unwrap_FCN_model, metrics_loss = train_unw_network(unwrap_FCN_model, data_files_train, n_epochs, ['loss'], X_validate, Y_validate)                                    # train
 
-unwrap_FCN_model.save('unwrap_FCN_model')
+with open(f"{model_output_dir}/model_summary.txt", 'w') as f:                                                                                            # summary of model to a text file.  
+    with redirect_stdout(f):
+        unwrap_FCN_model.summary()                                                                                                                                 # summary to terminal.  
+keras.utils.plot_model(unwrap_FCN_model, f"{model_output_dir}/unwrap_FCN.png", show_shapes=True)                                                        # plot of the model to a png file.
+
+
+unwrap_FCN_model, metrics_loss = train_unw_network(unwrap_FCN_model, data_files_train, n_epochs, ['loss'], X_validate, Y_validate, 
+                                                   model_output_dir)                                                                                       # train
+
+unwrap_FCN_model.save(f"{model_output_dir}/unwrap_FCN_model_final")
 
 #%% Evaluate / predict
 
